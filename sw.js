@@ -1,5 +1,5 @@
 // スマホの裏側で動く係。オフライン対応と、通知の表示を担当する。
-const CACHE = "ieta-v1";
+const CACHE = "ieta-v2";
 const FILES = [
   "./", "./index.html", "./style.css", "./vendor/ts-fsrs.umd.js", "./logic.js", "./app.js",
   "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png",
@@ -22,7 +22,7 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));

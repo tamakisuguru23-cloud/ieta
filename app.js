@@ -20,6 +20,62 @@ function save() {
   } catch (e) {
     toast("保存できませんでした");
   }
+  scheduleSnapshot();
+}
+
+// ---- 自動バックアップ（アプリの中に、日ごとの控えを残す） ----
+// 本体のデータとは別の保存場所（IndexedDB）に置く。操作ミスや不具合で消えたときに戻せる。
+const SNAPSHOT_DB = "ieta-backup";
+
+function openSnapshots() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SNAPSHOT_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("days");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function snapshotStore(mode, fn) {
+  const db = await openSnapshots();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("days", mode);
+      const req = fn(tx.objectStore("days"));
+      tx.oncomplete = () => resolve(req ? req.result : undefined);
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function writeSnapshot() {
+  clearTimeout(snapshotTimer);
+  // 空の状態で上書きすると、戻したい控えを失うので残さない。
+  if (!("indexedDB" in window) || state.cards.length === 0) return;
+  try {
+    const date = Logic.today();
+    const copy = JSON.parse(JSON.stringify(state));
+    await snapshotStore("readwrite", (s) => s.put({ date, savedAt: Date.now(), state: copy }, date));
+    const old = Logic.oldSnapshots(await snapshotStore("readonly", (s) => s.getAllKeys()));
+    if (old.length > 0) await snapshotStore("readwrite", (s) => { old.forEach((d) => s.delete(d)); });
+  } catch (e) { /* 控えが作れなくても、本体のデータは保存済み */ }
+}
+
+let snapshotTimer;
+function scheduleSnapshot() {
+  clearTimeout(snapshotTimer);
+  snapshotTimer = setTimeout(writeSnapshot, 1000);
+}
+
+async function listSnapshots() {
+  try {
+    const all = await snapshotStore("readonly", (s) => s.getAll());
+    return all.sort((a, b) => b.date.localeCompare(a.date));
+  } catch (e) {
+    return [];
+  }
 }
 
 function getToken() {
@@ -164,9 +220,6 @@ function renderHome() {
         id: "paste",
         onclick: renderPaste,
       }, "英会話の記録を貼る")),
-    needsBackup()
-      ? h("button", { class: "link nudge", id: "backup-nudge", onclick: backup }, "バックアップを保存（7日以上していません）")
-      : null,
     h("div", { class: "foot" },
       h("button", { class: "link", id: "add", onclick: () => renderForm() }, "1つ追加"),
       h("button", { class: "link", id: "list", onclick: () => renderList(waiting > 0 ? "todo" : "all") },
@@ -535,17 +588,46 @@ function renderSettings() {
     h("p", {}, "iPhoneのリマインダーで設定します。新規 → 日付と時刻をオン → 繰り返し「毎日」→ URLにこのアプリのアドレスを貼る。"),
     h("button", { class: "btn secondary", id: "copy-url", onclick: copyUrl }, "アプリのアドレスをコピー"));
 
+  const snapshots = h("div", { id: "snapshots", class: "stack" });
+
   show(h("div", {},
     topBar("設定"),
     hasServer ? serverSections : reminderSection,
     h("div", { class: "section" },
-      h("h2", {}, "データ"),
-      h("p", { id: "last-backup" }, hasServer
-        ? "サーバーにも自動で保存されています。"
-        : `データはこのiPhoneの中だけにあります。最後のバックアップ：${lastBackup() || "まだ"}`),
-      h("button", { class: "btn secondary", id: "backup", onclick: backup }, "バックアップを保存"),
-      h("button", { class: "btn secondary", id: "restore", onclick: restore }, "バックアップから戻す"),
+      h("h2", {}, "バックアップ"),
+      h("p", {}, "アプリの中に、毎日自動で控えを残しています（14日分）。カードが消えたときは、日付を選んで戻せます。"),
+      snapshots),
+    h("div", { class: "section" },
+      h("h2", {}, "機種変更のとき"),
+      h("p", {}, "新しいiPhoneへ移すときだけ使います。"),
+      h("button", { class: "btn secondary", id: "export", onclick: exportFile }, "ファイルに書き出す"),
+      h("button", { class: "btn secondary", id: "import", onclick: importFile }, "ファイルから読み込む"),
       h("button", { class: "btn secondary", id: "csv", onclick: exportCSV }, "CSVで書き出す"))));
+  fillSnapshots();
+}
+
+function fillSnapshots() {
+  listSnapshots().then((list) => {
+    if (list.length === 0) {
+      snapshots.replaceChildren(h("p", {}, "まだ控えはありません。カードを入れると自動で作られます。"));
+      return;
+    }
+    snapshots.replaceChildren(...list.map((snap) => {
+      const [, m, d] = snap.date.split("-").map(Number);
+      return h("button", {
+        class: "btn secondary",
+        "data-snapshot": snap.date,
+        onclick: () => {
+          if (!confirm(`${m}月${d}日の状態（${snap.state.cards.length}枚）に戻しますか？`)) return;
+          state = Logic.restoreSnapshot(state, snap.state, Date.now());
+          save();
+          sync();
+          toast("戻しました");
+          renderSettings();
+        },
+      }, `${m}月${d}日の状態に戻す（${snap.state.cards.length}枚）`);
+    }));
+  });
 }
 
 const base64ToBytes = (s) => {
@@ -596,29 +678,9 @@ async function saveFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const BACKUP_KEY = "ieta.lastBackup";
-
-function lastBackup() {
-  try {
-    return localStorage.getItem(BACKUP_KEY) || "";
-  } catch (e) {
-    return "";
-  }
-}
-
-// サーバーがないときは、データがiPhoneの中だけになるので、週に1回は保存を促す。
-function needsBackup() {
-  if (hasServer || state.cards.length === 0) return false;
-  const last = lastBackup();
-  return !last || last <= Logic.addDays(Logic.today(), -7);
-}
-
-async function backup() {
-  await saveFile(`ieta-backup-${Logic.today()}.json`, JSON.stringify(state, null, 2), "application/json");
-  try {
-    localStorage.setItem(BACKUP_KEY, Logic.today());
-  } catch (e) { /* 記録できなくても、保存そのものは済んでいる */ }
-  if (onHome) renderHome();
+// 機種変更のときだけ使う。ふだんのバックアップはアプリが自動で行う。
+function exportFile() {
+  saveFile(`ieta-${Logic.today()}.json`, JSON.stringify(state, null, 2), "application/json");
 }
 
 function exportCSV() {
@@ -626,12 +688,12 @@ function exportCSV() {
   saveFile(`ieta-cards-${Logic.today()}.csv`, `﻿${Logic.toCSV(state.cards)}`, "text/csv");
 }
 
-function restore() {
+function importFile() {
   const input = h("input", { type: "file", accept: ".json,application/json" });
   input.addEventListener("change", async () => {
     try {
       const data = Logic.parseBackup(await input.files[0].text());
-      if (!confirm(`バックアップの${data.cards.length}枚を、今のデータに合流させますか？`)) return;
+      if (!confirm(`ファイルの${data.cards.length}枚を、今のデータに合流させますか？`)) return;
       state = Logic.merge(state, data);
       save();
       sync();
@@ -648,8 +710,11 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") sync();
+  // iPhoneは裏に回ったアプリをすぐ止めることがあるので、その前に控えを残す。
+  else writeSnapshot();
 });
 renderHome();
+writeSnapshot();
 detectServer().then(() => {
   if (onHome) renderHome();
   sync();

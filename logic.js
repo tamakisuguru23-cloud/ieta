@@ -10,6 +10,8 @@ const Logic = (() => {
   const DAILY_LIMIT = 30;
   // 1日に新しく始めるカードの上限。増やしすぎると後の復習が溢れる。
   const NEW_PER_DAY = 10;
+  // 自動バックアップを残す日数。
+  const SNAPSHOT_DAYS = 14;
   // 深夜4時までは前日扱い。夜ふかしで連続日数が切れないようにする。
   const DAY_START_HOUR = 4;
 
@@ -247,6 +249,25 @@ ${transcript}
     });
   }
 
+  // 自動バックアップのうち、消してよい古い日付を返す。新しい順に keep 日分を残す。
+  function oldSnapshots(dates, keep = SNAPSHOT_DAYS) {
+    return [...dates].sort().reverse().slice(keep);
+  }
+
+  // 控えの状態に戻す。同期しているときに別端末から上書きされないよう、
+  // 戻したカードは今の時刻で更新し、今だけあるカードは消した扱いにする。
+  function restoreSnapshot(current, snapshot, now) {
+    const keep = new Set(snapshot.cards.map((c) => c.id));
+    const deleted = { ...current.deleted };
+    for (const id of keep) delete deleted[id];
+    for (const c of current.cards) if (!keep.has(c.id)) deleted[c.id] = now;
+    return {
+      cards: snapshot.cards.map((c) => ({ ...c, updatedAt: now })),
+      deleted,
+      doneDays: [...new Set([...current.doneDays, ...snapshot.doneDays])].sort(),
+    };
+  }
+
   function toCSV(cards) {
     const cell = (s) => `"${String(s).replace(/"/g, '""')}"`;
     const rows = cards.filter(isReady).map((c) => [c.ja, c.en, c.example].map(cell).join(","));
@@ -264,7 +285,7 @@ ${transcript}
   return {
     DAILY_LIMIT, NEW_PER_DAY,
     today, addDays, newCard, isReady, buildQueue, grade, streak, merge, pickNew,
-    buildPrompt, parseReply, searchCards, sortCards, toCSV, parseBackup,
+    buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, toCSV, parseBackup,
   };
 })();
 

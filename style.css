@@ -188,3 +188,4 @@ td.empty { max-width: none; text-align: center; }
 }
 
 .nudge { display: block; width: 100%; margin-top: 8px; color: var(--accent); font-size: 14px; }
+.stack { display: grid; gap: 8px; }
