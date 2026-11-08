@@ -6,6 +6,13 @@ const GEMINI_URL = "https://gemini.google.com/app";
 const app = document.getElementById("app");
 
 // ---- データの保存 ----
+// 2か所に保存する。iPhoneはアプリを閉じたとき、localStorage への書き込みを終える前に
+// 止めてしまうことがある。そこで、書き込みの完了を確かめられる IndexedDB にも毎回すぐ保存し、
+// 起動時は両方を合わせて読む。
+const DATA_DB = "ieta-data";
+const DRAFT_KEY = "ieta.draft";
+const SNAPSHOT_DB = "ieta-backup";
+
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
@@ -14,42 +21,101 @@ function load() {
   return { cards: [], doneDays: [], deleted: {} };
 }
 
-function save() {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
-  } catch (e) {
-    toast("保存できませんでした");
-  }
-  scheduleSnapshot();
-}
-
-// ---- 自動バックアップ（アプリの中に、日ごとの控えを残す） ----
-// 本体のデータとは別の保存場所（IndexedDB）に置く。操作ミスや不具合で消えたときに戻せる。
-const SNAPSHOT_DB = "ieta-backup";
-
-function openSnapshots() {
+function openDB(name, storeName) {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(SNAPSHOT_DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("days");
+    const req = indexedDB.open(name, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(storeName);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 
-async function snapshotStore(mode, fn) {
-  const db = await openSnapshots();
+// 書き込みは、端末に書き終わったことを確かめてから完了にする（durability: "strict"）。
+async function useStore(name, storeName, mode, fn) {
+  const db = await openDB(name, storeName);
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction("days", mode);
-      const req = fn(tx.objectStore("days"));
+      const tx = db.transaction(storeName, mode, { durability: "strict" });
+      const req = fn(tx.objectStore(storeName));
       tx.oncomplete = () => resolve(req ? req.result : undefined);
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
     });
   } finally {
     db.close();
   }
 }
 
+const dataStore = (mode, fn) => useStore(DATA_DB, "kv", mode, fn);
+const snapshotStore = (mode, fn) => useStore(SNAPSHOT_DB, "days", mode, fn);
+
+function save() {
+  const text = JSON.stringify(state);
+  let quick = true;
+  try {
+    localStorage.setItem(STORE_KEY, text);
+  } catch (e) {
+    quick = false;
+  }
+  if ("indexedDB" in window) {
+    dataStore("readwrite", (s) => s.put(JSON.parse(text), "state"))
+      .catch(() => { if (!quick) toast("保存できませんでした"); });
+  } else if (!quick) {
+    toast("保存できませんでした");
+  }
+  scheduleSnapshot();
+}
+
+// 起動時に、2か所の保存と自動の控えから、データを取り戻す。
+async function recover() {
+  if (!("indexedDB" in window)) return;
+  const before = JSON.stringify(state);
+  try {
+    const stored = await dataStore("readonly", (s) => s.get("state"));
+    if (stored && Array.isArray(stored.cards)) {
+      state = Logic.merge(state, { deleted: {}, doneDays: [], ...stored });
+    }
+  } catch (e) { /* 読めなければ、手元の分だけで続ける */ }
+  // 本体が空なのに控えが残っていれば、確認せずに戻す。
+  if (state.cards.length === 0) {
+    const [latest] = await listSnapshots();
+    if (latest && latest.state.cards.length > 0) {
+      state = Logic.merge(state, { deleted: {}, doneDays: [], ...latest.state });
+      toast("前回のデータを戻しました");
+    }
+  }
+  if (JSON.stringify(state) !== before) {
+    save();
+    if (onHome) renderHome();
+  }
+}
+
+// 貼り付けの途中の文章。Geminiへ切り替えている間にアプリが閉じても残す。
+function loadDraft() {
+  try {
+    return { transcript: "", reply: "", ...JSON.parse(localStorage.getItem(DRAFT_KEY)) };
+  } catch (e) {
+    return { transcript: "", reply: "" };
+  }
+}
+
+function saveDraft(draft) {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch (e) { /* 下書きは失っても大きな問題ではない */ }
+  if ("indexedDB" in window) dataStore("readwrite", (s) => s.put(draft, "draft")).catch(() => {});
+}
+
+async function loadDraftDurable() {
+  try {
+    return (await dataStore("readonly", (s) => s.get("draft"))) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ---- 自動バックアップ（アプリの中に、日ごとの控えを残す） ----
+// 本体のデータとは別の保存場所に置く。操作ミスや不具合で消えたときに戻せる。
 async function writeSnapshot() {
   clearTimeout(snapshotTimer);
   // 空の状態で上書きすると、戻したい控えを失うので残さない。
@@ -70,6 +136,7 @@ function scheduleSnapshot() {
 }
 
 async function listSnapshots() {
+  if (!("indexedDB" in window)) return [];
   try {
     const all = await snapshotStore("readonly", (s) => s.getAll());
     return all.sort((a, b) => b.date.localeCompare(a.date));
@@ -77,6 +144,9 @@ async function listSnapshots() {
     return [];
   }
 }
+
+// iPhoneで、ホーム画面のアイコンではなくSafariで開いているか。データの保存場所が別になる。
+const inSafariTab = /iPhone|iPad/.test(navigator.userAgent) && navigator.standalone === false;
 
 function getToken() {
   try {
@@ -269,6 +339,9 @@ function renderHome() {
     : null;
 
   show(h("div", { class: "home" },
+    inSafariTab
+      ? h("p", { class: "warn", id: "safari-warn" }, "Safariで開いています。ホーム画面の「言えた」のアイコンから開いてください。ここで入れたカードは、アイコンから開いたアプリには出ません。")
+      : null,
     header,
     hero,
     tiles,
@@ -308,6 +381,22 @@ function renderPaste() {
     "aria-label": "Geminiの答え",
   });
 
+  const draft = loadDraft();
+  transcript.value = draft.transcript;
+  reply.value = draft.reply;
+  const keepDraft = () => saveDraft({ transcript: transcript.value, reply: reply.value });
+  transcript.addEventListener("input", keepDraft);
+  reply.addEventListener("input", keepDraft);
+  // localStorage が消えていても、もう1か所に残っていれば戻す。
+  if (!draft.transcript && !draft.reply) {
+    loadDraftDurable().then((d) => {
+      if (d && !transcript.value && !reply.value) {
+        transcript.value = d.transcript || "";
+        reply.value = d.reply || "";
+      }
+    });
+  }
+
   const copyPrompt = async () => {
     if (!transcript.value.trim()) {
       toast("記録を貼ってください");
@@ -332,6 +421,7 @@ function renderPaste() {
       const added = Logic.pickNew(state.cards, result.cards).map((d) => Logic.newCard(d, date));
       state.cards.push(...added);
       save();
+      saveDraft({ transcript: "", reply: "" });
       sync();
       renderResult(result, added);
     } catch (e) {
@@ -807,7 +897,11 @@ document.addEventListener("visibilitychange", () => {
   else writeSnapshot();
 });
 renderHome();
-writeSnapshot();
+recover().then(writeSnapshot);
+window.addEventListener("pagehide", () => {
+  save();
+  writeSnapshot();
+});
 detectServer().then(() => {
   if (onHome) renderHome();
   sync();

@@ -272,3 +272,4 @@ td.empty { max-width: none; text-align: center; }
   .card .a, .big-flame { animation: none; }
 }
 .ring-fill.empty { stroke-opacity: 0; }
+.warn { margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--ink); font-size: 14px; line-height: 1.5; }
