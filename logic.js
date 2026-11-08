@@ -48,6 +48,37 @@ const Logic = (() => {
     };
   }
 
+  // 外から入るデータ（ファイル・AIの答え）の上限。極端に大きいデータでアプリが固まらないようにする。
+  const MAX_TEXT = 1000;
+  const MAX_CARDS = 20000;
+  const MAX_REPLY_CARDS = 50;
+  const DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const ID = /^[a-z0-9]{1,40}$/;
+
+  const text = (v) => (typeof v === "string" ? v.slice(0, MAX_TEXT) : "");
+  const date = (v, fallback) => (typeof v === "string" && DATE.test(v) ? v : fallback);
+
+  // ファイルや同期から来たカードを、アプリが扱える形にそろえる。おかしなものは捨てる。
+  function cleanCard(c, fallbackDate) {
+    if (!c || typeof c !== "object" || typeof c.id !== "string" || !ID.test(c.id)) return null;
+    const card = {
+      id: c.id,
+      ja: text(c.ja),
+      en: text(c.en),
+      example: text(c.example),
+      said: text(c.said),
+      why: text(c.why),
+      kind: c.kind === "word" ? "word" : "speak",
+      due: date(c.due, fallbackDate),
+      createdAt: date(c.createdAt, fallbackDate),
+      updatedAt: Number.isFinite(c.updatedAt) ? c.updatedAt : 0,
+    };
+    if (DATE.test(c.lastReview || "")) card.lastReview = c.lastReview;
+    if (DATE.test(c.firstReview || "")) card.firstReview = c.firstReview;
+    if (c.memory && typeof c.memory === "object" && Number.isFinite(c.memory.stability)) card.memory = c.memory;
+    return card;
+  }
+
   // 日本語と英語の両方がそろって、はじめて練習に出せる。
   const isReady = (card) => Boolean(card.ja && card.en);
 
@@ -116,7 +147,8 @@ const Logic = (() => {
   // 2台の端末のデータを1つにまとめる。カードごとに新しい方を残す。
   // 消したカードが別の端末から復活しないよう、消した時刻を deleted に残しておく。
   function merge(a, b) {
-    const deleted = { ...a.deleted };
+    // 中身のない新しい箱を使い、"__proto__" のような名前でも壊れないようにする。
+    const deleted = Object.assign(Object.create(null), a.deleted);
     for (const [id, at] of Object.entries(b.deleted || {})) {
       deleted[id] = Math.max(deleted[id] || 0, at);
     }
@@ -214,11 +246,11 @@ ${transcript}
     } catch (e) {
       throw new Error("答えの形が崩れています。もう一度コピーしてください");
     }
-    if (!Array.isArray(data.cards)) throw new Error("答えの中にカードが見つかりません");
-    const str = (v) => (typeof v === "string" ? v : "");
+    if (!data || !Array.isArray(data.cards)) throw new Error("答えの中にカードが見つかりません");
+    const str = (v) => (typeof v === "string" ? v.slice(0, MAX_TEXT) : "");
     return {
       summary: str(data.summary),
-      cards: data.cards.map((c) => ({
+      cards: data.cards.slice(0, MAX_REPLY_CARDS).filter((c) => c && typeof c === "object").map((c) => ({
         kind: c.kind === "word" ? "word" : "speak",
         ja: str(c.ja),
         en: str(c.en),
@@ -274,18 +306,28 @@ ${transcript}
     return ["日本語,英語,例文", ...rows].join("\r\n");
   }
 
-  function parseBackup(text) {
-    const data = JSON.parse(text);
+  function parseBackup(raw, today = "1970-01-01") {
+    const data = JSON.parse(raw);
     if (!data || !Array.isArray(data.cards) || !Array.isArray(data.doneDays)) {
       throw new Error("バックアップの形式が違います");
     }
-    return { cards: data.cards, doneDays: data.doneDays, deleted: data.deleted || {} };
+    const deleted = {};
+    if (data.deleted && typeof data.deleted === "object") {
+      for (const [id, at] of Object.entries(data.deleted)) {
+        if (ID.test(id) && Number.isFinite(at)) deleted[id] = at;
+      }
+    }
+    return {
+      cards: data.cards.slice(0, MAX_CARDS).map((c) => cleanCard(c, today)).filter(Boolean),
+      doneDays: data.doneDays.filter((d) => typeof d === "string" && DATE.test(d)),
+      deleted,
+    };
   }
 
   return {
     DAILY_LIMIT, NEW_PER_DAY,
     today, addDays, newCard, isReady, buildQueue, grade, streak, merge, pickNew,
-    buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, toCSV, parseBackup,
+    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, toCSV, parseBackup,
   };
 })();
 

@@ -692,7 +692,9 @@ function importFile() {
   const input = h("input", { type: "file", accept: ".json,application/json" });
   input.addEventListener("change", async () => {
     try {
-      const data = Logic.parseBackup(await input.files[0].text());
+      const file = input.files[0];
+      if (file.size > 20 * 1024 * 1024) throw new Error("大きすぎます");
+      const data = Logic.parseBackup(await file.text(), Logic.today());
       if (!confirm(`ファイルの${data.cards.length}枚を、今のデータに合流させますか？`)) return;
       state = Logic.merge(state, data);
       save();
