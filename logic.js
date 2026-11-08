@@ -300,6 +300,50 @@ ${transcript}
     };
   }
 
+  // ホームに出す、直近7日の記録。今日が一番右。
+  const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
+  function week(doneDays, date) {
+    const done = new Set(doneDays);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(date, i - 6);
+      return { date: d, label: WEEKDAYS[new Date(`${d}T00:00:00Z`).getUTCDay()], done: done.has(d), today: d === date };
+    });
+  }
+
+  // 記憶の強さが21日以上なら「覚えた」とみなす（Ankiの「成熟」と同じ目安）。
+  const MASTERED_DAYS = 21;
+  function progress(cards, date) {
+    const ready = cards.filter(isReady);
+    const mastered = ready.filter((c) => c.memory && c.memory.stability >= MASTERED_DAYS).length;
+    const started = ready.filter((c) => c.lastReview).length;
+    return {
+      mastered,
+      learning: started - mastered,
+      fresh: ready.length - started,
+      doneToday: ready.filter((c) => c.lastReview === date).length,
+    };
+  }
+
+  // 練習を終えたときの言葉。節目の日は特別な言葉にする。
+  function cheer(days) {
+    const milestones = {
+      1: "最初の1日。ここから始まります。",
+      3: "3日続きました。習慣になり始めています。",
+      7: "1週間続きました。英語が毎日の一部になっています。",
+      14: "2週間。もう立派な習慣です。",
+      30: "30日達成。続けた分だけ、言える英語が増えています。",
+      100: "100日。積み重ねが、本物の力になっています。",
+    };
+    if (milestones[days]) return milestones[days];
+    const usual = [
+      "今日も1歩。次の英会話で使えます。",
+      "思い出すたびに、記憶は強くなります。",
+      "続けている自分を、ほめてあげてください。",
+      "昨日より、言える英語が増えました。",
+    ];
+    return usual[days % usual.length];
+  }
+
   function toCSV(cards) {
     const cell = (s) => `"${String(s).replace(/"/g, '""')}"`;
     const rows = cards.filter(isReady).map((c) => [c.ja, c.en, c.example].map(cell).join(","));
@@ -327,7 +371,7 @@ ${transcript}
   return {
     DAILY_LIMIT, NEW_PER_DAY,
     today, addDays, newCard, isReady, buildQueue, grade, streak, merge, pickNew,
-    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, toCSV, parseBackup,
+    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, week, progress, cheer, toCSV, parseBackup,
   };
 })();
 

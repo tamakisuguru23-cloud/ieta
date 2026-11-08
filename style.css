@@ -1,21 +1,33 @@
 :root {
-  --bg: #faf8f4;
+  --bg: #fff8f0;
   --surface: #ffffff;
-  --ink: #1c1a16;
-  --muted: #6f6a60;
-  --line: #e6e1d7;
-  --accent: #c8421b;
+  --ink: #1f1a14;
+  --muted: #7a7064;
+  --line: #f0e4d6;
+  --accent: #e8540c;
+  --accent-soft: #ffe8d9;
   --on-accent: #ffffff;
+  --good: #12924a;
+  --good-soft: #dcf5e6;
+  --gold: #f5b70a;
+  --sky: #3b82f6;
+  --shadow: 0 6px 18px rgba(120, 72, 20, .10);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #16140f;
-    --surface: #211e18;
-    --ink: #f3efe6;
-    --muted: #a29c8f;
-    --line: #35312a;
-    --accent: #ef6a42;
-    --on-accent: #1c1208;
+    --bg: #15110d;
+    --surface: #221c16;
+    --ink: #f6efe6;
+    --muted: #a99d8f;
+    --line: #382e25;
+    --accent: #ff7a33;
+    --accent-soft: #3a2316;
+    --on-accent: #1d0f05;
+    --good: #3fcf7e;
+    --good-soft: #15301f;
+    --gold: #ffc93c;
+    --sky: #6aa3ff;
+    --shadow: 0 6px 18px rgba(0, 0, 0, .35);
   }
 }
 
@@ -189,3 +201,74 @@ td.empty { max-width: none; text-align: center; }
 
 .nudge { display: block; width: 100%; margin-top: 8px; color: var(--accent); font-size: 14px; }
 .stack { display: grid; gap: 8px; }
+
+/* ===== やる気が出るデザイン ===== */
+.btn { font-size: 19px; transition: transform .08s ease; }
+.btn:active { transform: scale(.97); }
+.btn.primary { box-shadow: 0 4px 0 #b33f06; }
+.btn.success { background: var(--good); color: #fff; box-shadow: 0 4px 0 #0b6b35; }
+.btn.secondary { box-shadow: 0 3px 0 var(--line); }
+.btn.primary:active, .btn.success:active, .btn.secondary:active { box-shadow: none; transform: translateY(3px); }
+.icon { width: 22px; height: 22px; flex: none; }
+.icon.small { width: 14px; height: 14px; }
+.icon.big { width: 56px; height: 56px; }
+.icon.huge { width: 120px; height: 120px; }
+
+.home-top { display: grid; gap: 12px; }
+.streak-chip { justify-self: start; display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px 6px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 17px; }
+.streak-chip.off { background: var(--line); color: var(--muted); }
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; padding: 10px 8px; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.day { display: grid; justify-items: center; gap: 4px; }
+.day .dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--line); color: #fff; }
+.day.done .dot { background: var(--accent); }
+.day.today .dot { outline: 2px solid var(--accent); outline-offset: 2px; }
+.day .label { font-size: 12px; color: var(--muted); }
+.day.today .label { color: var(--accent); font-weight: 700; }
+
+.ring { position: relative; width: min(62vw, 230px); aspect-ratio: 1; margin-bottom: 8px; }
+.ring svg { width: 100%; height: 100%; }
+.ring circle { fill: none; stroke-width: 12; }
+.ring-track { stroke: var(--line); }
+.ring-fill { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .6s ease; }
+.ring-fill.full { stroke: var(--good); }
+.ring-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.ring .count { font-size: 76px; }
+.ring-check { color: var(--good); }
+.welcome { color: var(--accent); margin-bottom: 12px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.tile { display: grid; justify-items: center; padding: 10px 4px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.tile strong { font-size: 24px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.tile span { font-size: 13px; color: var(--muted); }
+.tile.good strong { color: var(--good); }
+
+/* 練習 */
+.study-top { gap: 12px; padding-top: 4px; }
+.icon-btn { width: 44px; height: 44px; display: grid; place-items: center; color: var(--muted); }
+.bar { height: 12px; border-radius: 6px; }
+.bar > i { background: var(--good); border-radius: 6px; transition: width .35s ease; }
+.tally { min-width: 44px; text-align: right; color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+.card { flex: 1; margin: 16px 0; padding: 24px 20px; border-radius: 22px; background: var(--surface); box-shadow: var(--shadow); align-items: center; }
+.card.revealed { justify-content: flex-start; padding-top: 28px; overflow-y: auto; }
+.chip { align-self: center; padding: 2px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+.chip.word { background: var(--good-soft); color: var(--good); }
+.card .a { color: var(--good); animation: pop .25s ease; }
+.sound { display: inline-flex; align-items: center; gap: 6px; align-self: center; padding: 8px 14px; border-radius: 999px; background: var(--bg); color: var(--muted); font-size: 15px; }
+.notes { width: 100%; display: grid; gap: 10px; margin-top: 4px; padding-top: 14px; border-top: 1px dashed var(--line); text-align: left; }
+.notes .tag { display: inline-block; margin-right: 8px; padding: 0 8px; border-radius: 6px; background: var(--line); color: var(--muted); font-size: 12px; font-weight: 700; text-decoration: none; }
+.grade { padding-bottom: 4px; }
+@keyframes pop { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* 終わったとき */
+.finish { position: relative; overflow: hidden; }
+.big-flame { position: relative; display: grid; place-items: center; color: var(--accent); animation: pop .4s ease; }
+.big-flame .count { position: absolute; bottom: 6px; color: #fff; font-size: 44px; text-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
+.cheer { margin: 14px 0 0; font-size: 20px; font-weight: 800; line-height: 1.5; }
+.confetti { position: absolute; inset: 0; pointer-events: none; }
+.confetti i { position: absolute; top: -12px; left: var(--x); width: 9px; height: 14px; border-radius: 2px; transform: rotate(var(--r)); animation: fall 2.4s ease-in var(--d) forwards; }
+@keyframes fall { to { transform: translateY(105dvh) rotate(calc(var(--r) + 540deg)); opacity: .8; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .card .a, .big-flame { animation: none; }
+}
+.ring-fill.empty { stroke-opacity: 0; }

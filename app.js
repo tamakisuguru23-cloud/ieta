@@ -149,6 +149,46 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
+// SVG（炎や円のグラフ）を作る。HTMLとは作り方が違う。
+function svg(tag, attrs = {}, ...children) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+  for (const child of children) el.append(child);
+  return el;
+}
+
+const ICONS = {
+  flame: "M12 2c1 3.2-.6 5-2.2 6.7C8.2 10.4 6.5 12.2 6.5 15a5.5 5.5 0 0 0 11 0c0-2.1-.9-3.7-2-5 .1 1.6-.5 2.8-1.6 3.4.4-2.9-.6-6.6-1.9-11.4z",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  close: "M6 6l12 12M18 6L6 18",
+  sound: "M4 9.5h3.5L12 5.5v13l-4.5-4H4zM15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11",
+};
+
+function icon(name, cls = "icon") {
+  const filled = name === "flame";
+  return svg("svg", { class: cls, viewBox: "0 0 24 24", "aria-hidden": "true" },
+    svg("path", filled
+      ? { d: ICONS[name], fill: "currentColor" }
+      : { d: ICONS[name], fill: "none", stroke: "currentColor", "stroke-width": "2.2", "stroke-linecap": "round", "stroke-linejoin": "round" }));
+}
+
+// 今日の進み具合の円。part / whole を塗る。
+function ring(part, whole, ...center) {
+  const r = 54;
+  const length = 2 * Math.PI * r;
+  const ratio = whole > 0 ? part / whole : 1;
+  return h("div", { class: "ring" },
+    svg("svg", { viewBox: "0 0 128 128", "aria-hidden": "true" },
+      svg("circle", { class: "ring-track", cx: "64", cy: "64", r: String(r) }),
+      svg("circle", {
+        class: `ring-fill${ratio >= 1 ? " full" : ""}${ratio <= 0 ? " empty" : ""}`,
+        cx: "64", cy: "64", r: String(r),
+        "stroke-dasharray": `${length * ratio} ${length}`,
+        transform: "rotate(-90 64 64)",
+      })),
+    h("div", { class: "ring-center" }, ...center));
+}
+
 let onHome = false;
 function show(...nodes) {
   onHome = false;
@@ -192,25 +232,46 @@ function renderHome() {
   // 今日やる分がない日は、開いただけで達成にする（やることがない日に連続を切らない）。
   if (ready > 0 && queue.length === 0) markDone();
   const days = Logic.streak(state.doneDays, date);
+  const stats = Logic.progress(state.cards, date);
+  const doneToday = state.doneDays.includes(date);
+
+  const header = h("div", { class: "home-top" },
+    h("div", { class: `streak-chip${days > 0 ? "" : " off"}` }, icon("flame"), h("span", {}, days > 0 ? `${days}日連続` : "今日から")),
+    h("div", { class: "week", "aria-label": "直近7日の記録" }, Logic.week(state.doneDays, date).map((d) =>
+      h("div", { class: `day${d.done ? " done" : ""}${d.today ? " today" : ""}` },
+        h("span", { class: "dot" }, d.done ? icon("flame", "icon small") : null),
+        h("span", { class: "label" }, d.label)))));
 
   let hero;
-  if (queue.length > 0) {
+  if (state.cards.length === 0) {
     hero = h("div", { class: "hero" },
-      h("div", { class: "count" }, String(queue.length)),
-      h("div", { class: "count-label" }, "今日の分"));
-  } else if (state.cards.length === 0) {
-    hero = h("div", { class: "hero" },
+      h("div", { class: "welcome" }, icon("flame", "icon big")),
       h("p", { class: "hero-text" }, "言えなかった一言を、", h("br"), "明日には言えるようにする。"),
       h("p", { class: "hero-sub" }, "英会話の記録を貼るところから。"));
+  } else if (queue.length > 0) {
+    hero = h("div", { class: "hero" },
+      ring(stats.doneToday, stats.doneToday + queue.length,
+        h("div", { class: "count" }, String(queue.length)),
+        h("div", { class: "count-label" }, "今日の分")),
+      h("p", { class: "hero-sub" }, stats.doneToday > 0 ? "あと少し。続きから始めましょう。" : "今日の英語を、頭の中で作りましょう。"));
   } else {
     hero = h("div", { class: "hero" },
+      ring(1, 1, h("div", { class: "ring-check" }, icon("check", "icon big"))),
       h("p", { class: "hero-text" }, "今日の分は終わりです。"),
-      h("p", { class: "hero-sub" }, ready > 0 ? "また明日。" : "英語を入れると練習に出ます。"));
+      h("p", { class: "hero-sub" }, ready > 0 ? (doneToday ? "また明日。" : "また明日。") : "英語を入れると練習に出ます。"));
   }
 
+  const tiles = state.cards.length > 0
+    ? h("div", { class: "tiles" },
+      h("div", { class: "tile good" }, h("strong", {}, String(stats.mastered)), h("span", {}, "覚えた")),
+      h("div", { class: "tile" }, h("strong", {}, String(stats.learning)), h("span", {}, "練習中")),
+      h("div", { class: "tile" }, h("strong", {}, String(stats.fresh)), h("span", {}, "これから")))
+    : null;
+
   show(h("div", { class: "home" },
-    h("div", { class: "streak" }, days > 0 ? `${days}日連続` : ""),
+    header,
     hero,
+    tiles,
     h("div", { class: "actions" },
       queue.length > 0
         ? h("button", { class: "btn primary", id: "start", onclick: () => startSession(queue) }, "始める")
@@ -323,8 +384,10 @@ function renderResult(result, added) {
 
 // ---- 練習 ----
 function startSession(queue) {
-  renderQuestion({ pending: [...queue], total: queue.length, cleared: 0, answered: [] });
+  renderQuestion({ pending: [...queue], total: queue.length, cleared: 0, answered: [], firstOk: 0 });
 }
+
+const kindChip = (card) => h("span", { class: `chip ${card.kind}` }, card.kind === "word" ? "単語" : "文");
 
 function renderQuestion(session) {
   const card = session.pending[0];
@@ -332,6 +395,7 @@ function renderQuestion(session) {
   show(h("div", { class: "study" },
     studyTop(session),
     h("button", { class: "card", id: "reveal", onclick: reveal },
+      kindChip(card),
       h("div", { class: "q" }, card.ja),
       h("div", { class: "hint" }, "頭の中で英文を作ってから、タップ"))));
   document.onkeydown = (e) => {
@@ -344,16 +408,20 @@ function renderAnswer(session) {
   const answer = (ok) => gradeCard(session, ok);
   show(h("div", { class: "study" },
     studyTop(session),
-    h("div", { class: "card" },
+    h("div", { class: "card revealed" },
+      kindChip(card),
       h("div", { class: "q" }, card.ja),
       h("div", { class: "a", lang: "en" }, card.en),
-      card.said ? h("div", { class: "said", lang: "en" }, "自分：", h("s", {}, card.said)) : null,
-      card.why ? h("div", { class: "why" }, card.why) : null,
-      card.example ? h("div", { class: "ex", lang: "en" }, card.example) : null,
-      h("div", {}, h("button", { class: "link", onclick: () => speak(card.en) }, "音声を聞く"))),
+      h("button", { class: "sound", onclick: () => speak(card.en) }, icon("sound"), "音声を聞く"),
+      card.said || card.why || card.example
+        ? h("div", { class: "notes" },
+          card.said ? h("div", { class: "said", lang: "en" }, h("span", { class: "tag" }, "自分"), h("s", {}, card.said)) : null,
+          card.why ? h("div", { class: "why" }, card.why) : null,
+          card.example ? h("div", { class: "ex", lang: "en" }, h("span", { class: "tag" }, "例文"), card.example) : null)
+        : null),
     h("div", { class: "grade" },
       h("button", { class: "btn secondary", id: "miss", onclick: () => answer(false) }, "まだ"),
-      h("button", { class: "btn primary", id: "ok", onclick: () => answer(true) }, "☑ できた"))));
+      h("button", { class: "btn success", id: "ok", onclick: () => answer(true) }, "☑ できた"))));
   document.onkeydown = (e) => {
     if (e.key === "1") answer(false);
     if (e.key === "2") answer(true);
@@ -364,15 +432,17 @@ function studyTop(session) {
   const fill = h("i");
   fill.style.width = `${Math.round((session.cleared / session.total) * 100)}%`;
   return h("div", { class: "study-top" },
-    h("button", { class: "link", id: "quit", onclick: () => { sync(); renderHome(); } }, "やめる"),
-    h("div", { class: "bar" }, fill));
+    h("button", { class: "icon-btn", id: "quit", "aria-label": "やめる", onclick: () => { sync(); renderHome(); } }, icon("close")),
+    h("div", { class: "bar" }, fill),
+    h("span", { class: "tally" }, `${session.cleared}/${session.total}`));
 }
 
 function gradeCard(session, ok) {
   const [card, ...rest] = session.pending;
+  const first = !session.answered.includes(card.id);
 
   // 記憶の計算に入れるのは、その日の最初の答えだけ。やり直しは同じ日の練習として扱う。
-  if (!session.answered.includes(card.id)) {
+  if (first) {
     const updated = Logic.grade(card, ok, Logic.today());
     state.cards = state.cards.map((c) => (c.id === card.id ? updated : c));
     save();
@@ -384,20 +454,41 @@ function gradeCard(session, ok) {
     pending: ok ? rest : [...rest, card],
     cleared: session.cleared + (ok ? 1 : 0),
     answered: [...session.answered, card.id],
+    firstOk: session.firstOk + (first && ok ? 1 : 0),
   };
   if (next.pending.length > 0) renderQuestion(next);
   else finishSession(next);
+}
+
+// 紙吹雪。動きを減らす設定の人には出さない。
+function confetti() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return null;
+  const colors = ["var(--accent)", "var(--good)", "var(--gold)", "var(--sky)"];
+  return h("div", { class: "confetti", "aria-hidden": "true" }, Array.from({ length: 28 }, (_, i) => {
+    const bit = h("i");
+    bit.style.setProperty("--x", `${(i * 37) % 100}%`);
+    bit.style.setProperty("--d", `${(i % 7) * 0.12}s`);
+    bit.style.setProperty("--r", `${(i * 53) % 360}deg`);
+    bit.style.background = colors[i % colors.length];
+    return bit;
+  }));
 }
 
 function finishSession(session) {
   markDone();
   sync();
   const days = Logic.streak(state.doneDays, Logic.today());
-  show(h("div", { class: "home" },
+  const rate = Math.round((session.firstOk / session.total) * 100);
+  show(h("div", { class: "home finish" },
+    confetti(),
     h("div", { class: "hero" },
-      h("div", { class: "count" }, String(days)),
+      h("div", { class: "big-flame" }, icon("flame", "icon huge"), h("div", { class: "count" }, String(days))),
       h("div", { class: "count-label" }, "日連続"),
+      h("p", { class: "cheer" }, Logic.cheer(days)),
       h("p", { class: "hero-sub" }, `今日は ${session.total} 問、全部できました。`)),
+    h("div", { class: "tiles" },
+      h("div", { class: "tile" }, h("strong", {}, String(session.total)), h("span", {}, "練習した")),
+      h("div", { class: "tile good" }, h("strong", {}, `${rate}%`), h("span", {}, "1回でできた"))),
     h("div", { class: "actions" },
       h("button", { class: "btn primary", id: "home", onclick: renderHome }, "閉じる"))));
 }
