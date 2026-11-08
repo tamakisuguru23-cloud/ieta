@@ -3,6 +3,8 @@
 const STORE_KEY = "ieta.v1";
 const TOKEN_KEY = "ieta.token";
 const GEMINI_URL = "https://gemini.google.com/app";
+const REMINDER_FILE = "reminder.ics";
+const ONBOARD_KEY = "ieta.onboarded";
 const app = document.getElementById("app");
 
 // ---- データの保存 ----
@@ -228,6 +230,11 @@ function svg(tag, attrs = {}, ...children) {
 }
 
 const ICONS = {
+  home: "M3.5 10.5L12 4l8.5 6.5V20a1 1 0 0 1-1 1H15v-6H9v6H4.5a1 1 0 0 1-1-1z",
+  paste: "M9 3.5h6v3H9zM7.5 5H5.5v15.5h13V5h-2M8.5 11.5h7M8.5 15.5h4.5",
+  book: "M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5zM5 19.5A1.5 1.5 0 0 0 6.5 21H19M9 7.5h6",
+  gear: "M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4zM12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8",
+  bolt: "M13.5 2L4.5 13.5h6.5l-1 8.5 9-11.5h-6.5z",
   flame: "M12 2c1 3.2-.6 5-2.2 6.7C8.2 10.4 6.5 12.2 6.5 15a5.5 5.5 0 0 0 11 0c0-2.1-.9-3.7-2-5 .1 1.6-.5 2.8-1.6 3.4.4-2.9-.6-6.6-1.9-11.4z",
   check: "M5 12.5l4.5 4.5L19 7.5",
   close: "M6 6l12 12M18 6L6 18",
@@ -235,7 +242,7 @@ const ICONS = {
 };
 
 function icon(name, cls = "icon") {
-  const filled = name === "flame";
+  const filled = name === "flame" || name === "bolt";
   return svg("svg", { class: cls, viewBox: "0 0 24 24", "aria-hidden": "true" },
     svg("path", filled
       ? { d: ICONS[name], fill: "currentColor" }
@@ -249,6 +256,14 @@ function ring(part, whole, ...center) {
   const ratio = whole > 0 ? part / whole : 1;
   return h("div", { class: "ring" },
     svg("svg", { viewBox: "0 0 128 128", "aria-hidden": "true" },
+      svg("defs", {},
+        svg("linearGradient", { id: "fire", x1: "0", y1: "0", x2: "1", y2: "1" },
+          svg("stop", { offset: "0", "stop-color": "#ffb23f" }),
+          svg("stop", { offset: "0.5", "stop-color": "#ff6a2c" }),
+          svg("stop", { offset: "1", "stop-color": "#ff3d77" })),
+        svg("linearGradient", { id: "fresh", x1: "0", y1: "0", x2: "1", y2: "1" },
+          svg("stop", { offset: "0", "stop-color": "#2ee59d" }),
+          svg("stop", { offset: "1", "stop-color": "#12c2e9" }))),
       svg("circle", { class: "ring-track", cx: "64", cy: "64", r: String(r) }),
       svg("circle", {
         class: `ring-fill${ratio >= 1 ? " full" : ""}${ratio <= 0 ? " empty" : ""}`,
@@ -263,9 +278,42 @@ let onHome = false;
 function show(...nodes) {
   onHome = false;
   app.classList.remove("wide");
+  app.classList.toggle("with-tabs", nodes.some((n) => n && n.classList && n.classList.contains("tabbar")));
   document.onkeydown = null;
-  app.replaceChildren(...nodes);
+  app.replaceChildren(...nodes.filter(Boolean));
   window.scrollTo(0, 0);
+}
+
+// 画面の下のタブ。ホーム・貼る・単語帳・設定を1タップで切り替える。
+function tabBar(active) {
+  const waiting = state.cards.filter((c) => !Logic.isReady(c)).length;
+  const tab = (id, key, name, label, onclick, badge) => h("button", {
+    class: `tab${active === key ? " on" : ""}`,
+    id,
+    "aria-current": active === key ? "page" : "false",
+    onclick,
+  }, icon(name), h("span", {}, label), badge ? h("span", { class: "badge" }, String(badge)) : null);
+  return h("nav", { class: "tabbar", "aria-label": "メニュー" },
+    tab("tab-home", "home", "home", "ホーム", renderHome),
+    tab("paste", "paste", "paste", "貼る", renderPaste),
+    tab("list", "list", "book", "単語帳", () => renderList(waiting > 0 ? "todo" : "all"), waiting),
+    tab("settings", "settings", "gear", "設定", renderSettings));
+}
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 11) return "おはようございます";
+  if (hour >= 11 && hour < 18) return "こんにちは";
+  return "こんばんは";
+}
+
+function levelCard(lv, ratio = lv.into / lv.need) {
+  const fill = h("i");
+  fill.style.width = `${Math.round(ratio * 100)}%`;
+  return h("div", { class: "level glass" },
+    h("span", { class: "lv" }, icon("bolt", "icon small"), `Lv.${lv.level}`),
+    h("div", { class: "xpbar" }, fill),
+    h("span", { class: "xp" }, `${lv.into}/${lv.need} XP`));
 }
 
 function topBar(title, back = renderHome) {
@@ -297,45 +345,56 @@ function renderHome() {
   const date = Logic.today();
   const queue = Logic.buildQueue(state.cards, date);
   const ready = state.cards.filter(Logic.isReady).length;
-  const waiting = state.cards.length - ready;
 
   // 今日やる分がない日は、開いただけで達成にする（やることがない日に連続を切らない）。
   if (ready > 0 && queue.length === 0) markDone();
   const days = Logic.streak(state.doneDays, date);
   const stats = Logic.progress(state.cards, date);
-  const doneToday = state.doneDays.includes(date);
+
+  let title = "今日の英語、始めよう。";
+  if (state.cards.length === 0) title = "最初の1枚を作ろう。";
+  else if (queue.length === 0) title = "今日はクリア！";
+  else if (stats.doneToday > 0) title = "あと少し、いける。";
 
   const header = h("div", { class: "home-top" },
-    h("div", { class: `streak-chip${days > 0 ? "" : " off"}` }, icon("flame"), h("span", {}, days > 0 ? `${days}日連続` : "今日から")),
-    h("div", { class: "week", "aria-label": "直近7日の記録" }, Logic.week(state.doneDays, date).map((d) =>
-      h("div", { class: `day${d.done ? " done" : ""}${d.today ? " today" : ""}` },
-        h("span", { class: "dot" }, d.done ? icon("flame", "icon small") : null),
-        h("span", { class: "label" }, d.label)))));
+    h("div", { class: "greet" }, h("small", {}, greeting()), h("strong", {}, title)),
+    h("div", { class: `streak-chip${days > 0 ? "" : " off"}` }, icon("flame"), h("span", {}, days > 0 ? `${days}日連続` : "0日")));
+
+  const start = h("button", { class: "btn primary", id: "start", onclick: () => startSession(queue) }, "始める");
+  const pasteCta = h("button", { class: "btn primary", id: "paste-cta", onclick: renderPaste }, "英会話の記録を貼る");
 
   let hero;
   if (state.cards.length === 0) {
-    hero = h("div", { class: "hero" },
+    hero = h("div", { class: "hero-card glass" },
       h("div", { class: "welcome" }, icon("flame", "icon big")),
       h("p", { class: "hero-text" }, "言えなかった一言を、", h("br"), "明日には言えるようにする。"),
-      h("p", { class: "hero-sub" }, "英会話の記録を貼るところから。"));
+      h("p", { class: "hero-sub" }, "英会話の記録を貼るところから。"),
+      pasteCta);
   } else if (queue.length > 0) {
-    hero = h("div", { class: "hero" },
+    hero = h("div", { class: "hero-card glass" },
       ring(stats.doneToday, stats.doneToday + queue.length,
         h("div", { class: "count" }, String(queue.length)),
         h("div", { class: "count-label" }, "今日の分")),
-      h("p", { class: "hero-sub" }, stats.doneToday > 0 ? "あと少し。続きから始めましょう。" : "今日の英語を、頭の中で作りましょう。"));
+      h("p", { class: "hero-sub" }, `約${Math.max(1, Math.round(queue.length * 0.25))}分。頭の中で英文を作ろう。`),
+      start);
   } else {
-    hero = h("div", { class: "hero" },
+    hero = h("div", { class: "hero-card glass" },
       ring(1, 1, h("div", { class: "ring-check" }, icon("check", "icon big"))),
       h("p", { class: "hero-text" }, "今日の分は終わりです。"),
-      h("p", { class: "hero-sub" }, ready > 0 ? (doneToday ? "また明日。" : "また明日。") : "英語を入れると練習に出ます。"));
+      h("p", { class: "hero-sub" }, ready > 0 ? "また明日。次の英会話の記録も貼っておこう。" : "英語を入れると練習に出ます。"),
+      h("button", { class: "btn secondary", id: "paste-cta", onclick: renderPaste }, "英会話の記録を貼る"));
   }
+
+  const week = h("div", { class: "week glass", "aria-label": "直近7日の記録" }, Logic.week(state.doneDays, date).map((d) =>
+    h("div", { class: `day${d.done ? " done" : ""}${d.today ? " today" : ""}` },
+      h("span", { class: "dot" }, d.done ? icon("flame", "icon small") : null),
+      h("span", { class: "label" }, d.label))));
 
   const tiles = state.cards.length > 0
     ? h("div", { class: "tiles" },
-      h("div", { class: "tile good" }, h("strong", {}, String(stats.mastered)), h("span", {}, "覚えた")),
-      h("div", { class: "tile" }, h("strong", {}, String(stats.learning)), h("span", {}, "練習中")),
-      h("div", { class: "tile" }, h("strong", {}, String(stats.fresh)), h("span", {}, "これから")))
+      h("div", { class: "tile glass good" }, h("strong", {}, String(stats.mastered)), h("span", {}, "覚えた")),
+      h("div", { class: "tile glass fire" }, h("strong", {}, String(stats.learning)), h("span", {}, "練習中")),
+      h("div", { class: "tile glass" }, h("strong", {}, String(stats.fresh)), h("span", {}, "これから")))
     : null;
 
   show(h("div", { class: "home" },
@@ -343,23 +402,60 @@ function renderHome() {
       ? h("p", { class: "warn", id: "safari-warn" }, "Safariで開いています。ホーム画面の「言えた」のアイコンから開いてください。ここで入れたカードは、アイコンから開いたアプリには出ません。")
       : null,
     header,
+    state.cards.length > 0 ? levelCard(Logic.level(state.cards)) : null,
     hero,
+    week,
     tiles,
-    h("div", { class: "actions" },
-      queue.length > 0
-        ? h("button", { class: "btn primary", id: "start", onclick: () => startSession(queue) }, "始める")
-        : null,
-      h("button", {
-        class: `btn ${queue.length > 0 ? "secondary" : "primary"}`,
-        id: "paste",
-        onclick: renderPaste,
-      }, "英会話の記録を貼る")),
-    h("div", { class: "foot" },
-      h("button", { class: "link", id: "add", onclick: () => renderForm() }, "1つ追加"),
-      h("button", { class: "link", id: "list", onclick: () => renderList(waiting > 0 ? "todo" : "all") },
-        waiting > 0 ? `単語帳（英語待ち ${waiting}）` : "単語帳"),
-      h("button", { class: "link", id: "settings", onclick: renderSettings }, "設定"))));
+    h("div", { class: "quick" },
+      h("button", { class: "link", id: "add", onclick: () => renderForm() }, "＋ 1つ手で追加"))),
+  tabBar("home"));
   onHome = true;
+}
+
+// ---- 最初の案内 ----
+function onboarded() {
+  try {
+    return localStorage.getItem(ONBOARD_KEY) === "1";
+  } catch (e) {
+    return true;
+  }
+}
+
+function reminderButton(id, cls = "btn primary") {
+  return h("a", { class: cls, id, href: REMINDER_FILE, target: "_blank", rel: "noopener noreferrer" }, "毎晩11時の通知を追加");
+}
+
+function renderOnboarding() {
+  const finish = () => {
+    try {
+      localStorage.setItem(ONBOARD_KEY, "1");
+    } catch (e) { /* 次に開いたときにもう一度出るだけ */ }
+    renderHome();
+  };
+  const notify = reminderButton("add-reminder");
+  const notifyStep = h("div", { class: "step glass", id: "step-notify" },
+    h("span", { class: "step-no" }, "2"),
+    h("div", {},
+      h("h2", {}, "毎晩11時に通知を受け取る"),
+      h("p", {}, "カレンダーに毎日の予定を入れます。開いた画面で「追加」を押すと、毎晩23時に「連続記録を守ろう」と届きます。"),
+      notify));
+  notify.addEventListener("click", () => notifyStep.classList.add("done"));
+
+  show(h("div", { class: "onboard" },
+    h("div", { class: "hero-card glass" },
+      h("div", { class: "welcome" }, icon("flame", "icon big")),
+      h("p", { class: "hero-text" }, "言えなかった一言を、", h("br"), "明日には言えるようにする。"),
+      h("p", { class: "hero-sub" }, "はじめに、2つだけ設定します。")),
+    h("div", { class: "steps" },
+      h("div", { class: `step glass${inSafariTab ? "" : " done"}` },
+        h("span", { class: "step-no" }, "1"),
+        h("div", {},
+          h("h2", {}, "ホーム画面から開く"),
+          h("p", {}, inSafariTab
+            ? "いまはSafariで開いています。共有ボタン →「ホーム画面に追加」で追加し、アイコンから開き直してください。"
+            : "OK。ホーム画面のアプリとして開いています。"))),
+      notifyStep),
+    h("button", { class: "btn secondary", id: "onboard-done", onclick: finish }, "はじめる")));
 }
 
 // ---- 会話を貼る → Geminiの答えからカードを作る ----
@@ -441,7 +537,8 @@ function renderPaste() {
     h("div", { class: "section" },
       h("h2", {}, "3. 答えをコピーして、ここに貼る"),
       reply,
-      h("button", { class: "btn primary", id: "make", onclick: makeCards }, "カードにする"))));
+      h("button", { class: "btn primary", id: "make", onclick: makeCards }, "カードにする"))),
+  tabBar("paste"));
 }
 
 function renderResult(result, added) {
@@ -455,7 +552,7 @@ function renderResult(result, added) {
 
   const heading = h("h1", {}, `${added.length}枚 追加しました`);
   const rows = added.map((card) => {
-    const row = h("div", { class: "result" },
+    const row = h("div", { class: "result glass" },
       card.said ? h("div", { class: "said", lang: "en" }, h("s", {}, card.said)) : null,
       h("div", { class: "en", lang: "en" }, card.en),
       h("div", { class: "ja" }, card.ja),
@@ -474,17 +571,23 @@ function renderResult(result, added) {
 
 // ---- 練習 ----
 function startSession(queue) {
-  renderQuestion({ pending: [...queue], total: queue.length, cleared: 0, answered: [], firstOk: 0 });
+  renderQuestion({ pending: [...queue], total: queue.length, cleared: 0, answered: [], firstOk: 0, combo: 0 });
 }
 
 const kindChip = (card) => h("span", { class: `chip ${card.kind}` }, card.kind === "word" ? "単語" : "文");
+
+// 3問続けてできると、コンボを出す。
+const comboBadge = (session) => (session.combo >= 3
+  ? h("div", { class: "combo", id: "combo" }, icon("flame", "icon small"), `${session.combo}連続！`)
+  : null);
 
 function renderQuestion(session) {
   const card = session.pending[0];
   const reveal = () => renderAnswer(session);
   show(h("div", { class: "study" },
     studyTop(session),
-    h("button", { class: "card", id: "reveal", onclick: reveal },
+    comboBadge(session),
+    h("button", { class: "card glass", id: "reveal", onclick: reveal },
       kindChip(card),
       h("div", { class: "q" }, card.ja),
       h("div", { class: "hint" }, "頭の中で英文を作ってから、タップ"))));
@@ -498,7 +601,8 @@ function renderAnswer(session) {
   const answer = (ok) => gradeCard(session, ok);
   show(h("div", { class: "study" },
     studyTop(session),
-    h("div", { class: "card revealed" },
+    comboBadge(session),
+    h("div", { class: "card glass revealed" },
       kindChip(card),
       h("div", { class: "q" }, card.ja),
       h("div", { class: "a", lang: "en" }, card.en),
@@ -545,6 +649,7 @@ function gradeCard(session, ok) {
     cleared: session.cleared + (ok ? 1 : 0),
     answered: [...session.answered, card.id],
     firstOk: session.firstOk + (first && ok ? 1 : 0),
+    combo: ok ? session.combo + 1 : 0,
   };
   if (next.pending.length > 0) renderQuestion(next);
   else finishSession(next);
@@ -569,16 +674,29 @@ function finishSession(session) {
   sync();
   const days = Logic.streak(state.doneDays, Logic.today());
   const rate = Math.round((session.firstOk / session.total) * 100);
+  const gained = session.total * Logic.XP_PER_REVIEW;
+  const after = Logic.level(state.cards);
+  const before = Logic.levelFromXp(Math.max(0, after.xp - gained));
+  const leveledUp = after.level > before.level;
+
+  // レベルのゲージを、練習前の位置から今の位置まで伸ばす。
+  const bar = levelCard(after, leveledUp ? 0 : before.into / before.need);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    bar.querySelector(".xpbar i").style.width = `${Math.round((after.into / after.need) * 100)}%`;
+  }));
+
   show(h("div", { class: "home finish" },
     confetti(),
     h("div", { class: "hero" },
       h("div", { class: "big-flame" }, icon("flame", "icon huge"), h("div", { class: "count" }, String(days))),
       h("div", { class: "count-label" }, "日連続"),
-      h("p", { class: "cheer" }, Logic.cheer(days)),
-      h("p", { class: "hero-sub" }, `今日は ${session.total} 問、全部できました。`)),
+      h("p", { class: "cheer" }, leveledUp ? `レベルアップ！ Lv.${after.level}` : Logic.cheer(days)),
+      h("p", { class: "hero-sub" }, `今日は ${session.total} 問、全部できました。`),
+      h("span", { class: "gain" }, icon("bolt", "icon small"), `+${gained} XP`)),
+    bar,
     h("div", { class: "tiles" },
-      h("div", { class: "tile" }, h("strong", {}, String(session.total)), h("span", {}, "練習した")),
-      h("div", { class: "tile good" }, h("strong", {}, `${rate}%`), h("span", {}, "1回でできた"))),
+      h("div", { class: "tile glass" }, h("strong", {}, String(session.total)), h("span", {}, "練習した")),
+      h("div", { class: "tile glass good" }, h("strong", {}, `${rate}%`), h("span", {}, "1回でできた"))),
     h("div", { class: "actions" },
       h("button", { class: "btn primary", id: "home", onclick: renderHome }, "閉じる"))));
 }
@@ -718,7 +836,8 @@ function renderList(filter = "all", query = "", sort = { key: "createdAt", dir: 
       "aria-pressed": String(filter === value),
       onclick: () => renderList(value, search.value, sort),
     }, label)), count),
-    h("div", { class: "sheet" }, h("table", {}, h("thead", {}, head), body))));
+    h("div", { class: "sheet" }, h("table", {}, h("thead", {}, head), body))),
+  tabBar("list"));
   app.classList.add("wide");
   fillHead();
   fillRows();
@@ -766,7 +885,9 @@ function renderSettings() {
   // サーバーがないときは、iPhoneのリマインダーで毎日の通知を代わりにする。
   const reminderSection = h("div", { class: "section" },
     h("h2", {}, "毎日の通知"),
-    h("p", {}, "iPhoneのリマインダーで設定します。新規 → 日付と時刻をオン → 繰り返し「毎日」→ URLにこのアプリのアドレスを貼る。"),
+    h("p", {}, "カレンダーに毎晩23時の予定を入れて、通知を届けます。時刻を変えたいときは、カレンダーの予定を開いて変えてください。"),
+    reminderButton("add-reminder-settings", "btn secondary"),
+    h("p", {}, "リマインダーを使う場合は、アプリのアドレスをURLの欄に貼ってください。"),
     h("button", { class: "btn secondary", id: "copy-url", onclick: copyUrl }, "アプリのアドレスをコピー"));
 
   const snapshots = h("div", { id: "snapshots", class: "stack" });
@@ -783,7 +904,8 @@ function renderSettings() {
       h("p", {}, "新しいiPhoneへ移すときだけ使います。"),
       h("button", { class: "btn secondary", id: "export", onclick: exportFile }, "ファイルに書き出す"),
       h("button", { class: "btn secondary", id: "import", onclick: importFile }, "ファイルから読み込む"),
-      h("button", { class: "btn secondary", id: "csv", onclick: exportCSV }, "CSVで書き出す"))));
+      h("button", { class: "btn secondary", id: "csv", onclick: exportCSV }, "CSVで書き出す"))),
+  tabBar("settings"));
   fillSnapshots();
 }
 
@@ -897,7 +1019,10 @@ document.addEventListener("visibilitychange", () => {
   else writeSnapshot();
 });
 renderHome();
-recover().then(writeSnapshot);
+recover().then(() => {
+  if (onHome && !onboarded() && state.cards.length === 0) renderOnboarding();
+  writeSnapshot();
+});
 window.addEventListener("pagehide", () => {
   save();
   writeSnapshot();

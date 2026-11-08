@@ -324,6 +324,19 @@ ${transcript}
     };
   }
 
+  // 経験値。その日の最初の答え1回につき10。レベルLになるには 50×L×(L-1) が要る。
+  const XP_PER_REVIEW = 10;
+  function levelFromXp(xp) {
+    let lv = 1;
+    while (xp >= 50 * (lv + 1) * lv) lv += 1;
+    const base = 50 * lv * (lv - 1);
+    return { level: lv, xp, into: xp - base, need: 100 * lv };
+  }
+  function level(cards) {
+    const reps = cards.reduce((sum, c) => sum + (c.memory && Number.isFinite(c.memory.reps) ? c.memory.reps : 0), 0);
+    return levelFromXp(reps * XP_PER_REVIEW);
+  }
+
   // 練習を終えたときの言葉。節目の日は特別な言葉にする。
   function cheer(days) {
     const milestones = {
@@ -371,7 +384,7 @@ ${transcript}
   return {
     DAILY_LIMIT, NEW_PER_DAY,
     today, addDays, newCard, isReady, buildQueue, grade, streak, merge, pickNew,
-    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, week, progress, cheer, toCSV, parseBackup,
+    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, week, progress, cheer, level, levelFromXp, XP_PER_REVIEW, toCSV, parseBackup,
   };
 })();
 
