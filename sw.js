@@ -1,7 +1,7 @@
 // スマホの裏側で動く係。オフライン対応と、通知の表示を担当する。
-const CACHE = "ieta-v2";
+const CACHE = "ieta-v3";
 const FILES = [
-  "./", "./index.html", "./style.css", "./vendor/ts-fsrs.umd.js", "./logic.js", "./app.js",
+  "./", "./index.html", "./style.css", "./vendor/ts-fsrs.umd.js", "./config.js", "./logic.js", "./app.js",
   "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png",
 ];
 
@@ -34,9 +34,16 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
+const MESSAGES = [
+  "🔥 連続記録が消えそう！今日の英語、まだです。",
+  "今日の分が待っています。5分だけやろう。",
+  "寝る前の5分で、今日の英語を終わらせよう。",
+  "このままだと、連続記録が0に戻ります。",
+];
+
 self.addEventListener("push", (e) => {
   e.waitUntil(self.registration.showNotification("言えた", {
-    body: "今日の分が待っています。",
+    body: MESSAGES[Math.floor(Math.random() * MESSAGES.length)],
     icon: "icons/icon-192.png",
     tag: "daily",
   }));

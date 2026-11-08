@@ -2,6 +2,7 @@
 
 const STORE_KEY = "ieta.v1";
 const TOKEN_KEY = "ieta.token";
+const PUSH_KEY = "ieta.push";
 const GEMINI_URL = "https://gemini.google.com/app";
 const REMINDER_FILE = "reminder.ics";
 const ONBOARD_KEY = "ieta.onboarded";
@@ -150,12 +151,34 @@ async function listSnapshots() {
 // iPhoneで、ホーム画面のアイコンではなくSafariで開いているか。データの保存場所が別になる。
 const inSafariTab = /iPhone|iPad/.test(navigator.userAgent) && navigator.standalone === false;
 
-function getToken() {
+function getLocal(key) {
   try {
-    return localStorage.getItem(TOKEN_KEY) || "";
+    return localStorage.getItem(key) || "";
   } catch (e) {
     return "";
   }
+}
+
+function setLocal(key, value) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch (e) { /* 保存できない環境 */ }
+}
+
+// この端末の通知の鍵。サーバーが端末ごとに発行する。消えないよう2か所に保存する。
+const getToken = () => getLocal(TOKEN_KEY);
+function setToken(key) {
+  setLocal(TOKEN_KEY, key);
+  if ("indexedDB" in window) dataStore("readwrite", (s) => s.put(key, "token")).catch(() => {});
+}
+
+async function recoverToken() {
+  if (getToken() || !("indexedDB" in window)) return;
+  try {
+    const key = await dataStore("readonly", (s) => s.get("token"));
+    if (key) setLocal(TOKEN_KEY, key);
+  } catch (e) { /* なければ、通知をオンにし直せばよい */ }
 }
 
 let state = load();
@@ -170,39 +193,34 @@ function markDone() {
 
 // ---- サーバーとのやりとり ----
 async function api(path, options = {}) {
-  const res = await fetch(`/api/${path}`, {
+  const token = getToken();
+  const res = await fetch(`${API_BASE}/api/${path}`, {
     ...options,
-    headers: { "content-type": "application/json", authorization: `Bearer ${getToken()}` },
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || "サーバーにつながりませんでした");
   return body;
 }
 
-// サーバー（Cloudflare）があるときだけ、同期と通知を使う。GitHub Pagesにはサーバーがない。
+// 通知サーバーにつながるときだけ、通知を使う。つながらなければカレンダーで代わりにする。
 let hasServer = false;
 async function detectServer() {
   try {
-    const res = await fetch("/api/health", { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/api/health`, { cache: "no-store" });
     hasServer = res.ok && (await res.json()).ok === true;
   } catch (e) {
     hasServer = false;
   }
 }
 
-// 手元のデータをサーバーと混ぜ合わせる。失敗しても手元のデータはそのまま残る。
-let syncing = false;
+// 通知を送るかの判断のために、練習した日と出題日だけをサーバーへ知らせる。
+// カードの文章はiPhoneの外に出さない。失敗しても、アプリの動きには影響しない。
 async function sync() {
-  if (!hasServer || !getToken() || syncing) return;
-  syncing = true;
+  if (!hasServer || !getToken()) return;
   try {
-    const merged = await api("sync", { method: "POST", body: JSON.stringify(state) });
-    // 通信している間に手元が変わっていても失わないよう、もう一度混ぜる。
-    state = Logic.merge(state, merged);
-    save();
-    if (onHome) renderHome();
-  } catch (e) { /* オフラインなど。次の機会にまた試す */ }
-  syncing = false;
+    await api("status", { method: "POST", body: JSON.stringify(Logic.statusForServer(state, Logic.today())) });
+  } catch (e) { /* オフラインなど。次の機会にまた送る */ }
 }
 
 // ---- 部品 ----
@@ -432,14 +450,27 @@ function renderOnboarding() {
     } catch (e) { /* 次に開いたときにもう一度出るだけ */ }
     renderHome();
   };
-  const notify = reminderButton("add-reminder");
+  const notify = hasServer
+    ? h("button", { class: "btn primary", id: "enable-push" }, "通知をオンにする")
+    : reminderButton("add-reminder");
   const notifyStep = h("div", { class: "step glass", id: "step-notify" },
     h("span", { class: "step-no" }, "2"),
     h("div", {},
       h("h2", {}, "毎晩11時に通知を受け取る"),
-      h("p", {}, "カレンダーに毎日の予定を入れます。開いた画面で「追加」を押すと、毎晩23時に「連続記録を守ろう」と届きます。"),
+      h("p", {}, hasServer
+        ? "その日の練習が終わっていないときだけ、23時に届きます。やった日は届きません。"
+        : "カレンダーに毎日の予定を入れます。開いた画面で「追加」を押すと、毎晩23時に届きます。"),
       notify));
-  notify.addEventListener("click", () => notifyStep.classList.add("done"));
+  notify.addEventListener("click", async () => {
+    if (!hasServer) {
+      notifyStep.classList.add("done");
+      return;
+    }
+    if (await enablePush(23)) {
+      notifyStep.classList.add("done");
+      notify.textContent = "オンになりました";
+    }
+  });
 
   show(h("div", { class: "onboard" },
     h("div", { class: "hero-card glass" },
@@ -845,21 +876,10 @@ function renderList(filter = "all", query = "", sort = { key: "createdAt", dir: 
 
 // ---- 設定 ----
 function renderSettings() {
-  const token = h("input", { id: "token", type: "password", value: getToken(), autocomplete: "off", autocapitalize: "off" });
-  const saveToken = () => {
-    try {
-      localStorage.setItem(TOKEN_KEY, token.value.trim());
-    } catch (e) {
-      toast("保存できませんでした");
-      return;
-    }
-    toast("保存しました");
-    sync();
-  };
-
+  const pushOn = getLocal(PUSH_KEY) !== "";
   const hour = h("select", { id: "hour", "aria-label": "通知の時刻" },
     Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) }, `${i}:00`)));
-  hour.value = "20";
+  hour.value = getLocal(PUSH_KEY) || "23";
 
   const copyUrl = async () => {
     try {
@@ -872,15 +892,16 @@ function renderSettings() {
 
   const serverSections = [
     h("div", { class: "section" },
-      h("h2", {}, "接続キー"),
-      h("p", {}, "同期と通知を使うためのキーです。端末ごとに1回入れます。"),
-      h("label", {}, token),
-      h("button", { class: "btn secondary", id: "save-token", onclick: saveToken }, "保存")),
-    h("div", { class: "section" },
       h("h2", {}, "毎日の通知"),
-      h("p", {}, "今日の分が残っている日だけ、この時刻に届きます（日本時間）。"),
+      h("p", {}, "その日の練習が終わっていないときだけ、この時刻に届きます。やった日は届きません（日本時間）。"),
+      h("p", { id: "push-state" }, pushOn ? `いまはオンです（${getLocal(PUSH_KEY)}:00）。` : "いまはオフです。"),
       hour,
-      h("button", { class: "btn secondary", id: "notify", onclick: () => enablePush(Number(hour.value)) }, "通知をオンにする")),
+      h("button", {
+        class: "btn primary",
+        id: "notify",
+        onclick: async () => { if (await enablePush(Number(hour.value))) renderSettings(); },
+      }, pushOn ? "時刻を変える" : "通知をオンにする"),
+      pushOn ? h("button", { class: "btn secondary", id: "notify-off", onclick: disablePush }, "通知をオフにする") : null),
   ];
   // サーバーがないときは、iPhoneのリマインダーで毎日の通知を代わりにする。
   const reminderSection = h("div", { class: "section" },
@@ -938,32 +959,44 @@ const base64ToBytes = (s) => {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 };
 
+// 通知の許可は、本人がボタンを押したときにだけ求める。
 async function enablePush(hour) {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
     toast("iPhoneはホーム画面に追加してから開いてください");
-    return;
-  }
-  if (!getToken()) {
-    toast("先に接続キーを入れてください");
-    return;
+    return false;
   }
   try {
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      toast("通知が許可されませんでした");
-      return;
+      toast("通知が許可されませんでした。iPhoneの設定 → 通知 から許可できます");
+      return false;
     }
     const { publicKey } = await api("push/key");
     const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: base64ToBytes(publicKey),
-    });
-    await api("push/subscribe", { method: "POST", body: JSON.stringify({ subscription, hour }) });
-    toast(`毎日 ${hour}:00 に通知します`);
+    const subscription = (await registration.pushManager.getSubscription())
+      || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64ToBytes(publicKey) });
+    const res = await api("push/subscribe", { method: "POST", body: JSON.stringify({ subscription, hour }) });
+    if (res.key) setToken(res.key);
+    setLocal(PUSH_KEY, String(hour));
+    await sync();
+    toast(`練習が残っている日だけ、毎日 ${hour}:00 に通知します`);
+    return true;
   } catch (e) {
     toast(e.message || "通知をオンにできませんでした");
+    return false;
   }
+}
+
+// 通知をやめる。この端末の登録を解除すると、サーバーも次から送らなくなる。
+async function disablePush() {
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) await subscription.unsubscribe();
+  } catch (e) { /* 解除できなくても、iPhoneの設定から止められる */ }
+  setLocal(PUSH_KEY, null);
+  toast("通知をオフにしました");
+  renderSettings();
 }
 
 // ---- バックアップ ----
@@ -1019,15 +1052,13 @@ document.addEventListener("visibilitychange", () => {
   else writeSnapshot();
 });
 renderHome();
-recover().then(() => {
+Promise.all([recover(), recoverToken(), detectServer()]).then(() => {
   if (onHome && !onboarded() && state.cards.length === 0) renderOnboarding();
+  else if (onHome) renderHome();
   writeSnapshot();
+  sync();
 });
 window.addEventListener("pagehide", () => {
   save();
   writeSnapshot();
-});
-detectServer().then(() => {
-  if (onHome) renderHome();
-  sync();
 });

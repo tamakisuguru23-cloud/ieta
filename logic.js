@@ -357,6 +357,13 @@ ${transcript}
     return usual[days % usual.length];
   }
 
+  // 通知の判断のためにサーバーへ送る内容。カードの文章は含めず、日付だけにする。
+  function statusForServer(state, date) {
+    const dueDates = [...new Set(state.cards.filter(isReady).map((c) => c.due))].sort().slice(0, 400);
+    const doneDays = state.doneDays.filter((d) => d >= addDays(date, -60)).sort();
+    return { doneDays, dueDates };
+  }
+
   function toCSV(cards) {
     const cell = (s) => `"${String(s).replace(/"/g, '""')}"`;
     const rows = cards.filter(isReady).map((c) => [c.ja, c.en, c.example].map(cell).join(","));
@@ -384,7 +391,7 @@ ${transcript}
   return {
     DAILY_LIMIT, NEW_PER_DAY,
     today, addDays, newCard, isReady, buildQueue, grade, streak, merge, pickNew,
-    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, week, progress, cheer, level, levelFromXp, XP_PER_REVIEW, toCSV, parseBackup,
+    cleanCard, buildPrompt, parseReply, searchCards, sortCards, oldSnapshots, restoreSnapshot, week, progress, cheer, statusForServer, level, levelFromXp, XP_PER_REVIEW, toCSV, parseBackup,
   };
 })();
 
